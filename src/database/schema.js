@@ -163,7 +163,8 @@ export async function clearHistory(db) {
 function buildHistorySourceQuery(tableName, columns) {
   return `
     SELECT timestamp, ${columns} FROM ${tableName}
-    WHERE id >= ?
+    WHERE server_id = ?
+      AND id >= ?
       AND id <= ?
   `;
 }
@@ -277,12 +278,12 @@ export async function getMetricsHistory(
     const bindValues = [];
 
     sourceQueries.push(buildHistorySourceQuery('metrics_history', sourceColumns));
-    bindValues.push(idRange.startId, idRange.endId);
+    bindValues.push(serverId, idRange.startId, idRange.endId);
 
     if (oldTableExists) {
       debug('[History] 跨周查询，合并 metrics_history 和 metrics_history_old');
       sourceQueries.push(buildHistorySourceQuery('metrics_history_old', sourceColumns));
-      bindValues.push(idRange.startId, idRange.endId);
+      bindValues.push(serverId, idRange.startId, idRange.endId);
     }
 
     bindValues.push(intervalMs);
@@ -658,11 +659,12 @@ export async function getLatestMetrics(db, serverId, server = null) {
   
     const result = await db.prepare(`
       SELECT * FROM metrics_history
-      WHERE id >= ?
+      WHERE server_id = ?
+        AND id >= ?
         AND id <= ?
       ORDER BY id DESC
       LIMIT 1
-    `).bind(startId, endId).first();
+    `).bind(serverId, startId, endId).first();
     return result ? normalizeProbeMetricRow(result) : null;
   } catch (e) {
     console.error('获取最新指标数据失败:', e);
@@ -715,8 +717,8 @@ export async function getLatestMetricsForAllServers(db) {
       try {
         batchResults = await db.batch(chunk.map(item =>
           db.prepare(
-            'SELECT * FROM metrics_history WHERE id >= ? AND id <= ? ORDER BY id DESC LIMIT 1'
-          ).bind(item.startId, item.endId)
+            'SELECT * FROM metrics_history WHERE server_id = ? AND id >= ? AND id <= ? ORDER BY id DESC LIMIT 1'
+          ).bind(item.server.id, item.startId, item.endId)
         ));
       } catch (batchError) {
         // 整批失败时回退逐台查询，保持"单台异常不影响其它台"的既有语义
@@ -795,8 +797,8 @@ export async function getLatestTimestampsForAllServers(db) {
       const chunk = items.slice(offset, offset + LATEST_QUERY_CHUNK_SIZE);
       const batchResults = await db.batch(chunk.map(item =>
         db.prepare(
-          'SELECT timestamp FROM metrics_history WHERE id >= ? AND id <= ? ORDER BY id DESC LIMIT 1'
-        ).bind(item.startId, item.endId)
+          'SELECT timestamp FROM metrics_history WHERE server_id = ? AND id >= ? AND id <= ? ORDER BY id DESC LIMIT 1'
+        ).bind(item.serverId, item.startId, item.endId)
       ));
       for (let index = 0; index < chunk.length; index++) {
         const rows = batchResults[index] && batchResults[index].results;
